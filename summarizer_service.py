@@ -39,6 +39,7 @@ class TextRequest(BaseModel):
     temperature: float = 0.7
     top_p: float = 0.9
     max_tokens: int = 500
+    point_max_chars: int = 200
 
 
 class SummaryPoint(BaseModel):
@@ -153,14 +154,14 @@ def ensure_phi3_model() -> bool:
         return False
 
 
-async def stream_summary_points_with_phi3(english_text: str, num_points: int = 5, *, temperature: float = 0.7, top_p: float = 0.9, max_tokens: int = 500):
+async def stream_summary_points_with_phi3(english_text: str, num_points: int = 5, *, temperature: float = 0.7, top_p: float = 0.9, max_tokens: int = 500, point_max_chars: int = 200):
     """זרימת נקודות תקציר ישירות מ-Ollama (Phi-3) בזמן אמת.
 
     קורא את הפלט המוזרם של המודל, מזהה התחלה וסיום של כל נקודה ממוספרת,
     ומשיב כל נקודה מיד כשהיא הושלמה.
     """
-    prompt = f"""Please create a concise summary of the following text in exactly {num_points} bullet points.
-Each point must be a single line and start with an explicit number like "1. ", "2. ", etc.
+    prompt = f"""Please create a summary of the following text in exactly {num_points} numbered bullet points.
+Each point must be a single line, start with an explicit number like "1. ", "2. ", etc., and be at most {point_max_chars} characters long.
 Do not add any prose before or after the list. Only output the numbered list.
 
 Text to summarize:
@@ -233,6 +234,8 @@ Summary:"""
 
                 point_text = buffer[start_pos + len(start_marker):next_pos]
                 point_text = point_text.strip().strip("-•* ")
+                if point_max_chars and point_max_chars > 0 and len(point_text) > point_max_chars:
+                    point_text = point_text[:point_max_chars].rstrip()
                 if point_text:
                     yield expected_index, point_text
                     expected_index += 1
@@ -317,6 +320,9 @@ async def generate_streaming_summary(request: TextRequest) -> AsyncGenerator[str
             yield f"data: {json.dumps(error_msg, ensure_ascii=False)}\n\n"
             return
 
+        # שלב 3.א: שידור התרגום המלא לאנגלית ללקוח
+        yield f"data: {json.dumps({'english_text': english_text}, ensure_ascii=False)}\n\n"
+
         # שלב 4: יצירת תקציר בסטרימינג ושידור נקודות מיידית
         yield f"data: {json.dumps({'status': 'יוצר תקציר בסטרימינג...'}, ensure_ascii=False)}\n\n"
 
@@ -327,7 +333,8 @@ async def generate_streaming_summary(request: TextRequest) -> AsyncGenerator[str
                 request.max_summary_points,
                 temperature=request.temperature,
                 top_p=request.top_p,
-                max_tokens=request.max_tokens
+                max_tokens=request.max_tokens,
+                point_max_chars=request.point_max_chars
             ):
                 summary_point = SummaryPoint(
                     point_number=idx,
