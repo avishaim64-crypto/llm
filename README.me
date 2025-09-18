@@ -1,0 +1,76 @@
+# Hebrew Text Summarizer (FastAPI + NLLB + Ollama Phi-3)
+
+This FastAPI service accepts Hebrew text, streams a live English translation, and generates a real-time bullet-point summary using Ollama's phi3:mini. Each summary point is sent immediately upon detection via SSE.
+
+## Requirements
+- Python 3.10+
+- pip
+- Ollama installed and running with model `phi3:mini`
+- (Optional) CUDA for faster NLLB translation
+
+## Setup
+1) Start Ollama:
+- Install Ollama per official docs
+- Run in background: `ollama serve`
+- Pull model (one-time): `ollama pull phi3:mini`
+
+2) Install Python deps:
+```
+pip install -r requirements.txt
+```
+
+## Run
+Start the API server:
+```
+python summarizer_service.py
+```
+API will listen on `http://localhost:8000`.
+
+## Endpoint
+POST `/summarize`
+
+Body (JSON):
+```
+{
+  "text": "Long Hebrew text...",
+  "max_summary_points": 5,
+  "temperature": 0.7,
+  "top_p": 0.9,
+  "max_tokens": 500
+}
+```
+
+- text: Hebrew text (min 50 chars)
+- max_summary_points: 1–10
+- temperature/top_p/max_tokens: generation params for phi3
+
+Response: Server-Sent Events (SSE)
+- During translation:
+  - `data: {"translated_piece": "..."}` (streamed live)
+  - End of translation: `data: {"translated_text": "..."}`
+- During summarization:
+  - `data: {"summary_point": {"point_number": n, "content": "...", "timestamp": 1710000000.0}}`
+- Status events:
+  - `data: {"status": "יוצר תקציר בסטרימינג..."}`
+  - Completion: `data: {"status": "completed", "total_points": N}`
+
+Headers:
+- `Content-Type: text/event-stream`
+- `Cache-Control: no-cache`
+- `Connection: keep-alive`
+- `X-Accel-Buffering: no`
+
+## Example client
+Run the demo client:
+```
+python client_test.py
+```
+The client prints streaming translation and summary points and runs multiple scenarios to demonstrate parameter effects. Edit `scenarios` in the file to add your own.
+
+## Troubleshooting
+- ConnectionResetError (WinError 10054): Ensure Ollama is running, no proxy buffering, and SSE headers are set.
+- Slow translation: Use CUDA and a GPU-enabled environment for NLLB.
+- Bullet detection: The prompt enforces `1. 2. ...`. The code flushes any tail point at stream end.
+
+## License
+MIT

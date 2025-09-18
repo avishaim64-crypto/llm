@@ -36,6 +36,9 @@ nllb_model = None
 class TextRequest(BaseModel):
     text: str
     max_summary_points: int = 5
+    temperature: float = 0.7
+    top_p: float = 0.9
+    max_tokens: int = 500
 
 
 class SummaryPoint(BaseModel):
@@ -55,74 +58,73 @@ def initialize_nllb():
         nllb_model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
         print("✅ מודל NLLB נטען בהצלחה")
 
-def stream_translate_hebrew_to_english(hebrew_text: str):
-    """תרגום מעברית לאנגלית עם זרימה (streaming)"""
+def translate(text: str, tgt_lang: str, *, stream: bool = False, max_tokens: int = 200):
+    """תרגום גנרי בעזרת NLLB.
+
+    - stream=False: מחזיר מחרוזת מלאה.
+    - stream=True: מחזיר גנרטור שמפיק חלקי טקסט בזמן אמת.
+    """
     initialize_nllb()
 
-    # קידוד הטקסט
-    inputs = nllb_tokenizer(
-        hebrew_text,
-        return_tensors="pt",
-        max_length=1024,
-        truncation=True
-    )
+    if not stream:
+        inputs = nllb_tokenizer(
+            text,
+            return_tensors="pt",
+            max_length=1024,
+            truncation=True
+        )
+        tgt_id = nllb_tokenizer.convert_tokens_to_ids(tgt_lang)
+        if tgt_id is None:
+            raise ValueError(f"לא נמצא קוד שפה: {tgt_lang}")
+        with torch.no_grad():
+            generated_tokens = nllb_model.generate(
+                **inputs,
+                forced_bos_token_id=tgt_id,
+                max_length=1000,
+                num_beams=3,
+                early_stopping=True
+            )
+        translation = nllb_tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)[0]
+        return translation.strip()
 
-    # שפת יעד
-    tgt_lang = "eng_Latn"
-    tgt_id = nllb_tokenizer.convert_tokens_to_ids(tgt_lang)
-    if tgt_id is None:
-        raise ValueError(f"לא נמצא קוד שפה: {tgt_lang}")
+    # streaming path
+    def _stream_generator():
+        inputs = nllb_tokenizer(
+            text,
+            return_tensors="pt",
+            max_length=512,
+            truncation=True
+        )
+        model_device = next(nllb_model.parameters()).device
+        input_ids = inputs["input_ids"][:1].to(model_device)
+        attention_mask = inputs["attention_mask"][:1].to(model_device)
 
-    # יוצרים streamer שיחזיר טקסט בזמן אמת
-    streamer = TextIteratorStreamer(nllb_tokenizer, skip_special_tokens=True)
+        tgt_id = nllb_tokenizer.convert_tokens_to_ids(tgt_lang)
+        if tgt_id is None:
+            raise ValueError(f"לא נמצא קוד שפה: {tgt_lang}")
 
-    # הפעלת הגנרציה בת'רד נפרד כדי לא לחסום
-    generation_kwargs = dict(
-        **inputs,
-        forced_bos_token_id=tgt_id,
-        max_length=1000,
-        num_beams=3,
-        early_stopping=True,
-        streamer=streamer
-    )
-
-    thread = threading.Thread(target=nllb_model.generate, kwargs=generation_kwargs)
-    thread.start()
-
-    # נחזיר generator שמפיק חלקים מהתרגום בזמן אמת
-    for new_text in streamer:
-        yield new_text
-
-
-def translate_hebrew_to_english(hebrew_text: str) -> str:
-    """תרגום מעברית לאנגלית"""
-    initialize_nllb()
-
-    inputs = nllb_tokenizer(
-        hebrew_text,  # הטקסט בעברית שרוצים לתרגם
-        return_tensors="pt",  # החזר במבנה של PyTorch tensors (במקום רשימות רגילות)
-        max_length=1024,  # הגבל את הטקסט למקסימום 512 טוקנים (מילים/חלקי מילים)
-        truncation=True  # אם הטקסט ארוך מ-512 טוקנים, חתוך אותו (במקום לזרוק שגיאה)
-    )
-    # קוד שפת יעד - אנגלית
-    tgt_lang = "eng_Latn"
-    tgt_id = nllb_tokenizer.convert_tokens_to_ids(tgt_lang)
-
-    if tgt_id is None:
-        raise ValueError(f"לא נמצא קוד שפה: {tgt_lang}")
-
-    with torch.no_grad():
-        generated_tokens = nllb_model.generate(
-            **inputs,
+        streamer = TextIteratorStreamer(nllb_tokenizer, skip_special_tokens=True, skip_prompt=True)
+        generation_kwargs = dict(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
             forced_bos_token_id=tgt_id,
-            max_length=1000,
-            num_beams=3,
-            early_stopping=True
+            max_new_tokens=max_tokens,
+            do_sample=False,
+            num_beams=1,
+            streamer=streamer
         )
 
-    translation = nllb_tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)[0]
-    return translation.strip()
+        def _run_generate():
+            with torch.no_grad():
+                nllb_model.generate(**generation_kwargs)
 
+        thread = threading.Thread(target=_run_generate)
+        thread.start()
+
+        for new_text in streamer:
+            yield new_text
+
+    return _stream_generator()
 
 def check_ollama_connection() -> bool:
     """בדיקת חיבור ל-Ollama"""
@@ -151,7 +153,7 @@ def ensure_phi3_model() -> bool:
         return False
 
 
-async def stream_summary_points_with_phi3(english_text: str, num_points: int = 5):
+async def stream_summary_points_with_phi3(english_text: str, num_points: int = 5, *, temperature: float = 0.7, top_p: float = 0.9, max_tokens: int = 500):
     """זרימת נקודות תקציר ישירות מ-Ollama (Phi-3) בזמן אמת.
 
     קורא את הפלט המוזרם של המודל, מזהה התחלה וסיום של כל נקודה ממוספרת,
@@ -180,9 +182,9 @@ Summary:"""
                     model="phi3:mini",
                     messages=[{'role': 'user', 'content': prompt}],
                     options={
-                        'temperature': 0.7,
-                        'top_p': 0.9,
-                        'max_tokens': 500
+                        'temperature': float(temperature),
+                        'top_p': float(top_p),
+                        'max_tokens': int(max_tokens)
                     },
                     stream=True
                 )
@@ -306,12 +308,10 @@ async def generate_streaming_summary(request: TextRequest) -> AsyncGenerator[str
             yield f"data: {json.dumps(error_msg, ensure_ascii=False)}\n\n"
             return
 
-        # שלב 3: תרגום לאנגלית
-        yield f"data: {json.dumps({'status': 'מתרגם טקסט לאנגלית...'}, ensure_ascii=False)}\n\n"
-
+        # שלב 3: תרגום לאנגלית (ללא סטרימינג)
         try:
-            english_text = translate_hebrew_to_english(request.text)
-            yield f"data: {json.dumps({'status': 'תרגום הושלם', 'translated_text': english_text}, ensure_ascii=False)}\n\n"
+            english_text = translate(request.text, "eng_Latn", stream=False)
+
         except Exception as e:
             error_msg = {"error": f"שגיאה בתרגום: {str(e)}"}
             yield f"data: {json.dumps(error_msg, ensure_ascii=False)}\n\n"
@@ -322,7 +322,13 @@ async def generate_streaming_summary(request: TextRequest) -> AsyncGenerator[str
 
         sent_points = 0
         try:
-            async for idx, point in stream_summary_points_with_phi3(english_text, request.max_summary_points):
+            async for idx, point in stream_summary_points_with_phi3(
+                english_text,
+                request.max_summary_points,
+                temperature=request.temperature,
+                top_p=request.top_p,
+                max_tokens=request.max_tokens
+            ):
                 summary_point = SummaryPoint(
                     point_number=idx,
                     content=point,
@@ -330,6 +336,16 @@ async def generate_streaming_summary(request: TextRequest) -> AsyncGenerator[str
                 )
                 sent_points += 1
                 yield f"data: {json.dumps({'summary_point': summary_point.dict()}, ensure_ascii=False)}\n\n"
+
+                # שלב 5: תרגום הנקודה לעברית בסטרימינג
+                heb_text = ""
+                try:
+                    for piece in translate(point, "heb_Hebr", stream=True, max_tokens=200):
+                        heb_text += piece
+                        yield f"data: {json.dumps({'summary_point_hebrew_piece': {'point_number': idx, 'piece': piece}}, ensure_ascii=False)}\n\n"
+                    yield f"data: {json.dumps({'summary_point_hebrew': {'point_number': idx, 'content': heb_text}}, ensure_ascii=False)}\n\n"
+                except Exception as te:
+                    yield f"data: {json.dumps({'error': f'שגיאה בתרגום נקודה {idx} לעברית: {str(te)}'}, ensure_ascii=False)}\n\n"
 
                 if sent_points >= request.max_summary_points:
                     break
@@ -353,17 +369,6 @@ async def startup_event():
     print("🔄 טוען מודלי תרגום...")
     initialize_nllb()
 
-
-@app.get("/")
-async def root():
-    """דף בית"""
-    return {
-        "message": "שירות תקצור טקסטים בעברית",
-        "endpoints": {
-            "summarize": "/summarize - תקצור טקסט (POST)",
-            "health": "/health - בדיקת תקינות"
-        }
-    }
 
 
 @app.get("/health")
@@ -396,8 +401,8 @@ async def summarize_text(request: TextRequest):
     if len(request.text) < 50:
         raise HTTPException(status_code=400, detail="טקסט קצר מדי לתקצור (מינימום 50 תווים)")
 
-    if request.max_summary_points < 1 or request.max_summary_points > 100:
-        raise HTTPException(status_code=400, detail="מספר נקודות התקציר חייב להיות בין 1-100")
+    if request.max_summary_points < 1 or request.max_summary_points > 10:
+        raise HTTPException(status_code=400, detail="מספר נקודות התקציר חייב להיות בין 1-10")
 
     return StreamingResponse(
         generate_streaming_summary(request),

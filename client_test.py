@@ -3,7 +3,7 @@ import json
 import time
 
 
-def test_summarizer_service():
+def test_summarizer_service(params=None):
     """בדיקת שירות התקצור"""
 
     url = "http://localhost:8000/summarize"
@@ -23,8 +23,14 @@ def test_summarizer_service():
 
     data = {
         "text": hebrew_text,
-        "max_summary_points": 5
+        "max_summary_points": 5,
+        "temperature": 0.7,
+        "top_p": 0.9,
+        "max_tokens": 500,
     }
+
+    if params:
+        data.update(params)
 
     print("🚀 שולח בקשה לשירות התקצור...")
     print(f"📝 טקסט מקורי: {hebrew_text[:100]}...")
@@ -54,39 +60,59 @@ def test_summarizer_service():
         print("📡 מקבל תגובות בזמן אמת:")
         print("=" * 40)
 
+        buffer = ""
         point_counter = 0
 
-        for line in response.iter_lines(decode_unicode=True, chunk_size=1):
-            if line.startswith('data: '):
-                data_json = line[6:]  # הסרת 'data: '
+        # הגדלנו chunk_size ל־1024 כדי לקרוא בבת אחת יותר תווים
+        for chunk in response.iter_content(chunk_size=1024, decode_unicode=True):
+            if not chunk:
+                continue
 
-                try:
-                    data = json.loads(data_json)
+            buffer += chunk
 
-                    if 'status' in data:
-                        print(f"ℹ️  סטטוס: {data['status']}", flush=True)
+            # נבדוק אם יש לפחות קטע SSE שלם (מופרד ב־\n\n)
+            while '\n\n' in buffer:
+                part, buffer = buffer.split('\n\n', 1)
 
-                    elif 'summary_point' in data:
-                        point = data['summary_point']
-                        point_counter += 1
-                        print(f"\n📋 נקודה {point['point_number']}:", flush=True)
-                        print(f"   {point['content']}", flush=True)
-                        print(f"   (זמן: {time.strftime('%H:%M:%S', time.localtime(point['timestamp']))})", flush=True)
+                # חלק יכול להכיל כמה שורות, נפרק אותן
+                for line in part.splitlines():
+                    if not line.startswith('data: '):
+                        continue
+                    data_json = line[6:]
+                    try:
+                        data = json.loads(data_json)
 
-                    elif 'error' in data:
-                        print(f"❌ שגיאה: {data['error']}", flush=True)
-                        break
+                        # סטטוסים כלליים
+                        if 'status' in data:
+                            print(f"ℹ️  סטטוס: {data['status']}", flush=True)
 
-                    elif 'translated_text' in data:
-                        print(f"🔤 תרגום: {data['translated_text'][:100]}...", flush=True)
+                        # נקודות תקציר
+                        elif 'summary_point' in data:
+                            point = data['summary_point']
+                            point_counter += 1
+                            print(f"\n📋 נקודה {point['point_number']}:", flush=True)
+                            print(f"   {point['content']}", flush=True)
+                            print(f"   (זמן: {time.strftime('%H:%M:%S', time.localtime(point['timestamp']))})",
+                                  flush=True)
 
-                    elif data.get('status') == 'completed':
-                        print(f"\n✅ הושלם! סך הכל {data.get('total_points', 0)} נקודות", flush=True)
-                        break
+                        elif 'summary_point_hebrew' in data:
+                            final_he = data['summary_point_hebrew']
+                            print('', flush=True)  # סיום שורה
+                            print(f"🟦 תרגום לעברית לנקודה {final_he['point_number']}: {final_he['content']}", flush=True)
 
-                except json.JSONDecodeError as e:
-                    print(f"⚠️  שגיאה בפענוח JSON: {e}")
-                    continue
+                        # סיום התקציר
+                        elif data.get('status') == 'completed':
+                            print(f"\n✅ הושלם! סך הכל {data.get('total_points', 0)} נקודות", flush=True)
+                            break
+
+                        # שגיאה
+                        elif 'error' in data:
+                            print(f"❌ שגיאה: {data['error']}", flush=True)
+                            break
+
+                    except json.JSONDecodeError as e:
+                        print(f"⚠️  שגיאה בפענוח JSON: {e}", flush=True)
+                        continue
 
         print("\n" + "=" * 60)
         print(f"🏁 סיום - התקבלו {point_counter} נקודות תקציר")
@@ -125,5 +151,17 @@ if __name__ == "__main__":
     test_health_check()
     print()
 
-    # בדיקת התקצור בפועל
-    test_summarizer_service()
+    # הדגמות שונות של פרמטרים
+    scenarios = [
+        {"name": "ברירת מחדל", "params": {}},
+        {"name": "מנותק קשר", "params": {"temperature": 1.5, "top_p": 1}},
+        #{"name": "טמפרטורה גבוהה", "params": {"temperature": 1.0}},
+        #{"name": "טמפרטורה נמוכה", "params": {"temperature": 0.2}},
+        #{"name": "top_p גבוה", "params": {"top_p": 1}},
+        #{"name": "מגבלת טוקנים קטנה", "params": {"max_tokens": 150}},
+    ]
+
+    for s in scenarios:
+        print("\n" + "-" * 60)
+        print(f"🔧 תרחיש: {s['name']}")
+        test_summarizer_service(params=s["params"])
