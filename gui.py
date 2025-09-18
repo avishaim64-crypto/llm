@@ -37,7 +37,16 @@ SCENARIOS = [
 
 
 class SummarizerGUI:
+    """
+    ממשק גרפי (GUI) לתקשורת עם שירות סיכום טקסטים בזמן אמת.
+    שולח טקסט בעברית לשרת (באמצעות API מקומי), מציג תרגום,
+    ונקודות תקציר באנגלית ובעברית בזמן אמת.
+    """
     def __init__(self, root: tk.Tk) -> None:
+        """
+        אתחול ה-GUI והגדרת משתנים ראשיים.
+        :param root: חלון ראשי של tkinter
+        """
         self.root = root
         self.root.title("תקצור טקסטים - GUI")
         try:
@@ -45,14 +54,20 @@ class SummarizerGUI:
         except Exception:
             pass
 
-        self.temperature_var = tk.DoubleVar(value=0.7)
-        self.top_p_var = tk.DoubleVar(value=0.9)
-        self.max_tokens_var = tk.IntVar(value=500)
+        # פרמטרים ברירת מחדל
+        self.temperature_var = tk.DoubleVar(value=0.7)  # רמת יצירתיות
+        self.top_p_var = tk.DoubleVar(value=0.9)        # גרעין מילים (nucleus sampling)
+        self.max_tokens_var = tk.IntVar(value=500)      # מספר טוקנים מקסימלי
         self.scenario_var = tk.StringVar(value=SCENARIOS[0]["name"])
 
+        # יצירת כל רכיבי הממשק
         self._build_widgets()
 
     def _build_widgets(self) -> None:
+        """
+        בניית רכיבי הממשק (שדות טקסט, פרמטרים, כפתורים ותיבות פלט).
+        כולל הסברים על כל פרמטר.
+        """
         container = ttk.Frame(self.root, padding=10)
         container.grid(row=0, column=0, sticky="nsew")
         self.root.columnconfigure(0, weight=1)
@@ -63,55 +78,51 @@ class SummarizerGUI:
         self.input_text = tk.Text(container, height=10, wrap="word")
         self.input_text.grid(row=1, column=0, columnspan=6, sticky="nsew", pady=(0, 8))
         self.input_text.insert("1.0", DEFAULT_HEBREW_TEXT)
-        # הפעלת קיצור הדבקה Ctrl+V
         self._enable_paste_shortcuts(self.input_text)
 
-        # פרמטרים
-        ttk.Label(container, text="temperature").grid(row=2, column=0, sticky="w")
+        # --- פרמטרים במסגרות נפרדות ---
+        param_frame = ttk.Frame(container)
+        param_frame.grid(row=2, column=0, columnspan=6, sticky="nsew", pady=(0, 8))
+
+        # Temperature
+        temp_container = ttk.Frame(param_frame)
+        temp_container.grid(row=0, column=0, padx=4, sticky="w")
+        ttk.Label(temp_container, text="temperature").pack(anchor="w")
+        self.temperature_var = tk.DoubleVar(value=0.7)
         self.temp_spin = tk.Spinbox(
-            container,
-            from_=0.0,
-            to=2.0,
-            increment=0.1,
-            textvariable=self.temperature_var,
-            width=8
+            temp_container, from_=0.0, to=2.0, increment=0.1,
+            textvariable=self.temperature_var, width=8
         )
-        self.temp_spin.grid(row=2, column=1, sticky="w", padx=(4, 12))
+        self.temp_spin.pack(anchor="w")
+        ttk.Label(temp_container, text="רמת יצירתיות/אקראיות במודל: נמוך=צפוי, גבוה=יצירתי", foreground="gray").pack(
+            anchor="w")
 
-        ttk.Label(container, text="top_p").grid(row=2, column=2, sticky="w")
+        # Top-p
+        top_p_container = ttk.Frame(param_frame)
+        top_p_container.grid(row=0, column=1, padx=4, sticky="w")
+        ttk.Label(top_p_container, text="top_p").pack(anchor="w")
+        self.top_p_var = tk.DoubleVar(value=0.9)
         self.top_p_spin = tk.Spinbox(
-            container,
-            from_=0.0,
-            to=1.0,
-            increment=0.05,
-            textvariable=self.top_p_var,
-            width=8
+            top_p_container, from_=0.0, to=1.0, increment=0.05,
+            textvariable=self.top_p_var, width=8
         )
-        self.top_p_spin.grid(row=2, column=3, sticky="w", padx=(4, 12))
+        self.top_p_spin.pack(anchor="w")
+        ttk.Label(top_p_container, text="ככל שהערך גבוה יותר, המודל בוחר מתוך מגוון רחב יותר של מילים; ככל שהערך נמוך, הוא מוגבל למילים הסבירות ביותר.",
+                  foreground="gray").pack(anchor="w")
 
-        ttk.Label(container, text="max_tokens").grid(row=2, column=4, sticky="w")
+        # Max tokens
+        max_tokens_container = ttk.Frame(param_frame)
+        max_tokens_container.grid(row=0, column=2, padx=4, sticky="w")
+        ttk.Label(max_tokens_container, text="max_tokens").pack(anchor="w")
+        self.max_tokens_var = tk.IntVar(value=500)
         self.max_tokens_spin = tk.Spinbox(
-            container,
-            from_=1,
-            to=8192,
-            increment=10,
-            textvariable=self.max_tokens_var,
-            width=8
+            max_tokens_container, from_=1, to=8192, increment=10,
+            textvariable=self.max_tokens_var, width=8
         )
-        self.max_tokens_spin.grid(row=2, column=5, sticky="w")
+        self.max_tokens_spin.pack(anchor="w")
+        ttk.Label(max_tokens_container, text="מספר טוקנים מקסימלי שהמודל יפיק", foreground="gray").pack(anchor="w")
 
-        # אורך מקסימלי לנקודה
-        ttk.Label(container, text="point_max_chars").grid(row=3, column=2, sticky="w", pady=(8, 0))
-        self.point_max_chars_var = tk.IntVar(value=200)
-        self.point_len_spin = tk.Spinbox(
-            container,
-            from_=30,
-            to=1000,
-            increment=10,
-            textvariable=self.point_max_chars_var,
-            width=8
-        )
-        self.point_len_spin.grid(row=3, column=3, sticky="w", pady=(8, 0), padx=(4, 12))
+
 
         # בחירת תרחיש
         ttk.Label(container, text="תרחיש").grid(row=3, column=0, sticky="w", pady=(8, 0))
@@ -153,12 +164,18 @@ class SummarizerGUI:
         container.rowconfigure(9, weight=1)
 
     def _enable_paste_shortcuts(self, widget: tk.Text) -> None:
-        # הפעלת Ctrl+V ו-Shift+Insert להדבקה
+        """
+        הפעלת קיצורי דרך להדבקה (Ctrl+V, Shift+Insert).
+        """
         widget.bind("<Control-v>", lambda e: (widget.event_generate("<<Paste>>"), "break"))
         widget.bind("<Control-V>", lambda e: (widget.event_generate("<<Paste>>"), "break"))
         widget.bind("<Shift-Insert>", lambda e: (widget.event_generate("<<Paste>>"), "break"))
 
     def _on_scenario_change(self, selected_name: str) -> None:
+        """
+       עדכון ערכי הפרמטרים (temperature, top_p, max_tokens וכו׳)
+       לפי תרחיש שנבחר מתפריט ה־dropdown.
+       """
         for s in SCENARIOS:
             if s["name"] == selected_name:
                 params = s.get("params", {})
@@ -174,21 +191,31 @@ class SummarizerGUI:
                     self.max_tokens_var.set(params["max_tokens"])
                 else:
                     self.max_tokens_var.set(500)
-                if "point_max_chars" in params:
-                    self.point_max_chars_var.set(params["point_max_chars"])
+
                 break
 
     def _append_summary(self, text: str) -> None:
+        """
+        הוספת טקסט לחלון התקציר באנגלית.
+        :param text: טקסט שיוצג למשתמש
+        """
         self.summary_text.insert("end", text + "\n")
         self.summary_text.see("end")
 
     def _append_translation(self, text: str) -> None:
+        """
+        הוספת טקסט לחלון התרגום לעברית.
+        :param text: טקסט שיוצג למשתמש
+        """
         self.translation_text.configure(state="normal")
         self.translation_text.insert("end", text + "\n")
         self.translation_text.configure(state="disabled")
         self.translation_text.see("end")
 
     def _set_english_text(self, text: str) -> None:
+        """
+        הצגת תרגום מלא לאנגלית (פלט ראשוני מהמודל).
+        """
         self.english_text.configure(state="normal")
         self.english_text.delete("1.0", "end")
         self.english_text.insert("end", text)
@@ -196,6 +223,9 @@ class SummarizerGUI:
         self.english_text.see("end")
 
     def _clear_outputs(self) -> None:
+        """
+        איפוס כל חלונות הפלט (תקציר, תרגום, אנגלית).
+        """
         self.translation_text.configure(state="normal")
         self.translation_text.delete("1.0", "end")
         self.translation_text.configure(state="disabled")
@@ -205,20 +235,27 @@ class SummarizerGUI:
         self.english_text.configure(state="disabled")
 
     def _on_send_clicked(self) -> None:
+        """
+        אירוע לחיצה על כפתור "שליחה":
+        1. קריאת הטקסט מהמשתמש
+        2. בניית payload (פרמטרים שנשלחים לשרת)
+        3. הפעלת thread להרצת בקשה בזמן אמת
+        """
         text_value = self.input_text.get("1.0", "end").strip()
         if not text_value:
             messagebox.showwarning("אזהרה", "נא להזין טקסט בעברית")
             return
 
+        # כאן בונים את הבקשה לשרת – כולל פרמטרים שהמשתמש בחר
         payload = {
             "text": text_value,
             "max_summary_points": 5,
             "temperature": float(self.temperature_var.get()),
             "top_p": float(self.top_p_var.get()),
             "max_tokens": int(self.max_tokens_var.get()),
-            "point_max_chars": int(self.point_max_chars_var.get()),
         }
 
+        # איפוס פלט והתחלת סטרימינג
         self._clear_outputs()
         self.send_button.configure(state="disabled")
         self._append_summary(f"(זמן: {time.strftime('%H:%M:%S', time.localtime())})")
@@ -228,19 +265,25 @@ class SummarizerGUI:
         thread.start()
 
     def _stream_request(self, payload: dict) -> None:
+        """
+        שליחת בקשת POST לשירות הסיכום (API).
+        התשובה מתקבלת כזרם (Server-Sent Events, SSE).
+        הפונקציה קוראת צ'אנקים בזמן אמת ומעדכנת את ה-GUI.
+        """
         try:
             response = requests.post(
                 SERVICE_URL,
                 json=payload,
-                stream=True,
+                stream=True,  # מצב סטרימינג (לא ממתינים לסיום מלא)
                 headers={
-                    "Accept": "text/event-stream",
+                    "Accept": "text/event-stream",  # מבקשים SSE
                     "Cache-Control": "no-cache",
                     "Connection": "keep-alive",
                 },
                 timeout=120,
             )
 
+            # קוד סטטוס לא תקין
             if response.status_code != 200:
                 self.root.after(0, lambda: self._append_summary(f"שגיאה בשירות: {response.status_code}"))
                 self.root.after(0, lambda: self._append_summary(response.text))
@@ -249,11 +292,13 @@ class SummarizerGUI:
             buffer = ""
             completed = False
 
+            # קריאת הזרם בצ'אנקים
             for chunk in response.iter_content(chunk_size=1024, decode_unicode=True):
                 if not chunk:
                     continue
                 buffer += chunk
 
+                # עיבוד הודעות SSE לפי "\n\n"
                 while "\n\n" in buffer:
                     part, buffer = buffer.split("\n\n", 1)
                     for line in part.splitlines():
@@ -263,31 +308,37 @@ class SummarizerGUI:
                         try:
                             data = json.loads(data_json)
 
+                            # 🔹 מציג תרגום מלא לאנגלית
                             if "english_text" in data:
                                 et = data.get("english_text", "")
                                 self.root.after(0, lambda t=et: self._set_english_text(t))
 
+                            # 🔹 סטטוס ביניים (למשל: "מתרגם", "מסכם"...)
                             if "status" in data and data.get("status") != "completed":
                                 self.root.after(0, lambda s=data["status"]: self._append_summary(f"סטטוס: {s}"))
 
+                            # 🔹 נקודת תקציר באנגלית
                             elif "summary_point" in data:
                                 point = data["summary_point"]
                                 point_number = point.get("point_number")
                                 content = point.get("content", "")
                                 self.root.after(0, lambda n=point_number, c=content: self._append_summary(f"\nנקודה {n}: {c}"))
 
+                            # 🔹 תרגום נקודת תקציר לעברית
                             elif "summary_point_hebrew" in data:
                                 final_he = data["summary_point_hebrew"]
                                 pn = final_he.get("point_number")
                                 ct = final_he.get("content", "")
                                 self.root.after(0, lambda n=pn, c=ct: self._append_translation(f"תרגום לנקודה {n}: {c}"))
 
+                            # 🔹 סיום
                             if data.get("status") == "completed":
                                 total = data.get("total_points", 0)
                                 self.root.after(0, lambda t=total: self._append_summary(f"\nהושלם! סך הכל {t} נקודות"))
                                 completed = True
                                 break
 
+                            # 🔹 טיפול בשגיאות
                             if "error" in data:
                                 err = data["error"]
                                 self.root.after(0, lambda e=err: self._append_summary(f"שגיאה: {e}"))
@@ -302,8 +353,8 @@ class SummarizerGUI:
         except requests.exceptions.RequestException as e:
             self.root.after(0, lambda ex=e: self._append_summary(f"שגיאת חיבור: {ex}"))
         finally:
+            # משחררים את כפתור השליחה חזרה לשימוש
             self.root.after(0, lambda: self.send_button.configure(state="normal"))
-
 
 def main() -> None:
     root = tk.Tk()
